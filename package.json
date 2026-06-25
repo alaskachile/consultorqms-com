@@ -1,0 +1,21 @@
+{
+  "name": "consultorqms",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:generate": "pnpm --filter @cqms/db generate",
+    "db:migrate": "pnpm --filter @cqms/db migrate",
+    "db:seed": "pnpm --filter @cqms/db seed",
+    "infra:synth": "pnpm --filter @cqms/infra synth",
+    "infra:deploy": "pnpm --filter @cqms/infra deploy"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  }
+}
