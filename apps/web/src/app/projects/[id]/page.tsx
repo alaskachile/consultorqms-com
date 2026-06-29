@@ -62,12 +62,27 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
         <dd style={ddStyle}>{project.scope || <span style={{ opacity: 0.5 }}>Sin definir</span>}</dd>
       </dl>
 
-      <p style={{ opacity: 0.6, marginTop: "2rem", fontSize: "0.9rem" }}>
-        El diagnóstico por requisito se sumará a esta vista en una etapa posterior.
-      </p>
+      <div style={{ marginTop: "2rem" }}>
+        <Link href={`/projects/${project.id}/diagnostic`} style={btnStyle}>
+          Diagnóstico / GAP →
+        </Link>
+        <p style={{ opacity: 0.6, marginTop: "0.75rem", fontSize: "0.9rem" }}>
+          Evaluá cada cláusula (cumple / parcial / gap / no aplica). La preparación se recalcula al guardar.
+        </p>
+      </div>
     </main>
   );
 }
 
 const dtStyle = { opacity: 0.6, margin: 0 } as const;
 const ddStyle = { margin: 0 } as const;
+
+const btnStyle = {
+  display: "inline-block",
+  padding: "0.6rem 1.25rem",
+  background: "#1d4ed8",
+  color: "white",
+  borderRadius: 8,
+  textDecoration: "none",
+  fontWeight: 600,
+} as const;

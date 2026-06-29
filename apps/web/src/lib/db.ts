@@ -27,8 +27,11 @@ const rdsClient = new RDSDataClient({ region: process.env.AWS_REGION });
  *
  * Regla del proyecto: por defecto SOLO LECTURA (`db.select(...)`).
  *
- * Excepción controlada (Etapa 3 — gestión de Proyectos ISO X): se permite
- * INSERT/SELECT únicamente sobre las tablas `organizations` y `projects`.
+ * Excepciones controladas:
+ *  - Etapa 3 (gestión de Proyectos ISO X): INSERT/SELECT sobre `organizations`
+ *    y `projects`.
+ *  - Etapa 6 (Diagnóstico / GAP): INSERT/UPDATE/SELECT sobre `diagnostics` y
+ *    UPDATE de `readiness_pct` en `projects` (recálculo de preparación).
  * NUNCA ejecutar DROP / ALTER / migraciones ni tocar otras tablas con DML.
  */
 export const db = drizzle(rdsClient, { resourceArn, secretArn, database, schema });
