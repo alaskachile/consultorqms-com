@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { and, eq, sql } from "drizzle-orm";
 import { db, schema, withEnumCasts } from "@/lib/db";
 import { getDemoOrgId } from "@/lib/demo-org";
+import { diagnoseCompany } from "@/lib/agents/diagnostic";
 import { DIAGNOSTIC_STATUSES } from "@cqms/shared";
 
 /**
@@ -123,4 +124,149 @@ async function recalcReadiness(projectId: string, standardId: string, orgId: str
     .update(schema.projects)
     .set({ readinessPct: pct.toFixed(2) })
     .where(and(eq(schema.projects.id, projectId), eq(schema.projects.orgId, orgId)));
+}
+
+/**
+ * Resultado que la Server Action devuelve al cliente (patrón discriminado para
+ * mostrar errores del agente sin romper la UI con un throw).
+ */
+export type DiagnosticAgentActionResult =
+  | { ok: true; applied: number; skipped: number; total: number; modelId: string }
+  | { ok: false; error: string };
+
+/**
+ * Server Action del AGENTE de diagnóstico.
+ *
+ * Corre el agente IA sobre el proyecto y, por cada cláusula propuesta, hace UPSERT
+ * en `diagnostics` (por project_id + requirement_id) con el status sugerido y el
+ * rationale en `ai_notes`. Todo scopeado por la org del helper demo.
+ *
+ * Criterio conservador (CLAUDE.md): si una cláusula YA tiene `answer_text` cargado
+ * por el usuario, NO se pisa. Recalcula `readiness_pct` y registra la corrida en
+ * `agent_runs` (input/output JSON) para trazabilidad y control de gasto.
+ *
+ * DML acotado: INSERT/UPDATE sobre `diagnostics`, UPDATE de `readiness_pct` en
+ * `projects`, INSERT en `agent_runs`. Sin DROP/ALTER/migraciones.
+ */
+export async function runDiagnosticAgent(
+  projectId: string,
+  companyContext: string,
+): Promise<DiagnosticAgentActionResult> {
+  try {
+    const context = companyContext?.trim() ?? "";
+    if (!projectId?.trim()) throw new Error("Falta el proyecto.");
+    if (!context) throw new Error("Escribí el contexto de la empresa antes de generar el diagnóstico.");
+
+    const orgId = await getDemoOrgId();
+
+    // Scoping multi-tenant: el proyecto tiene que ser de esta org.
+    const [project] = await db
+      .select({ id: schema.projects.id, standardId: schema.projects.standardId })
+      .from(schema.projects)
+      .where(and(eq(schema.projects.id, projectId.trim()), eq(schema.projects.orgId, orgId)))
+      .limit(1);
+    if (!project) throw new Error("Proyecto no encontrado.");
+
+    // Corre el agente (solo lee catálogo). Si el JSON viene mal, lanza y no escribimos nada.
+    const agent = await diagnoseCompany({ standardId: project.standardId, companyContext: context });
+
+    // Mapa clauseNo → requirementId (para la norma del proyecto, con integridad garantizada).
+    const reqRows = await db
+      .select({ id: schema.requirements.id, clauseNo: schema.requirements.clauseNo })
+      .from(schema.requirements)
+      .where(eq(schema.requirements.standardId, project.standardId));
+    const reqIdByClause = new Map(reqRows.map((r) => [r.clauseNo, r.id]));
+
+    // Diagnósticos existentes de ESTE proyecto (para decidir UPSERT y respetar lo manual).
+    const existingRows = await db
+      .select({
+        requirementId: schema.diagnostics.requirementId,
+        id: schema.diagnostics.id,
+        answerText: schema.diagnostics.answerText,
+      })
+      .from(schema.diagnostics)
+      .where(
+        and(
+          eq(schema.diagnostics.projectId, project.id),
+          eq(schema.diagnostics.orgId, orgId),
+        ),
+      );
+    const existingByReq = new Map(existingRows.map((r) => [r.requirementId, r]));
+
+    let applied = 0;
+    let skipped = 0;
+
+    for (const a of agent.assessments) {
+      const requirementId = reqIdByClause.get(a.clauseNo);
+      if (!requirementId) {
+        skipped++;
+        continue;
+      }
+
+      const existing = existingByReq.get(requirementId);
+
+      // Conservador: si el usuario ya cargó una respuesta a mano, no la pisamos.
+      if (existing && existing.answerText && existing.answerText.trim() !== "") {
+        skipped++;
+        continue;
+      }
+
+      if (existing) {
+        await db
+          .update(schema.diagnostics)
+          .set(
+            withEnumCasts(schema.diagnostics, {
+              status: a.status,
+              aiNotes: a.rationale,
+              updatedAt: sql`now()`,
+            }),
+          )
+          .where(and(eq(schema.diagnostics.id, existing.id), eq(schema.diagnostics.orgId, orgId)));
+      } else {
+        await db.insert(schema.diagnostics).values(
+          withEnumCasts(schema.diagnostics, {
+            orgId,
+            projectId: project.id,
+            requirementId,
+            status: a.status,
+            aiNotes: a.rationale,
+          }),
+        );
+      }
+      applied++;
+    }
+
+    await recalcReadiness(project.id, project.standardId, orgId);
+
+    // Trazabilidad: registramos la corrida del agente (input/output JSON + tokens).
+    await db.insert(schema.agentRuns).values(
+      withEnumCasts(schema.agentRuns, {
+        orgId,
+        projectId: project.id,
+        agent: "diagnostic",
+        inputJson: {
+          companyContext: context,
+          standardId: project.standardId,
+          clauseCount: agent.clauseCount,
+        },
+        outputJson: {
+          provider: agent.provider,
+          modelId: agent.modelId,
+          applied,
+          skipped,
+          assessments: agent.assessments,
+        },
+        tokensIn: agent.usage?.inputTokens ?? null,
+        tokensOut: agent.usage?.outputTokens ?? null,
+      }),
+    );
+
+    revalidatePath(`/projects/${project.id}/diagnostic`);
+    revalidatePath(`/projects/${project.id}`);
+    revalidatePath("/projects");
+
+    return { ok: true, applied, skipped, total: agent.assessments.length, modelId: agent.modelId };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }

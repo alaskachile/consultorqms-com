@@ -4,6 +4,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getDemoOrgId } from "@/lib/demo-org";
 import { saveDiagnostic } from "./actions";
+import { AiDiagnosticPanel } from "./ai-panel";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
@@ -53,6 +54,7 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
       category: schema.requirements.category,
       status: schema.diagnostics.status,
       answerText: schema.diagnostics.answerText,
+      aiNotes: schema.diagnostics.aiNotes,
     })
     .from(schema.requirements)
     .leftJoin(
@@ -110,6 +112,8 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
         </div>
       </div>
 
+      <AiDiagnosticPanel projectId={project.id} />
+
       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.75rem" }}>
         {rows.map((r) => {
           const meta = r.status ? STATUS_META[r.status] : null;
@@ -127,16 +131,52 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
                 <strong>
                   {r.clauseNo} — {r.title}
                 </strong>
-                {meta ? (
-                  <span style={{ color: meta.color, fontWeight: 600, fontSize: "0.85rem", whiteSpace: "nowrap" }}>
-                    ● {meta.label}
-                  </span>
-                ) : (
-                  <span style={{ opacity: 0.45, fontSize: "0.85rem", whiteSpace: "nowrap" }}>Sin evaluar</span>
-                )}
+                <span style={{ display: "flex", gap: "0.5rem", alignItems: "center", whiteSpace: "nowrap" }}>
+                  {r.aiNotes && !r.answerText && (
+                    <span
+                      title="Sugerido por IA (sin corrección manual)"
+                      style={{
+                        fontSize: "0.7rem",
+                        fontWeight: 700,
+                        color: "#93c5fd",
+                        background: "#1e3a6b",
+                        border: "1px solid #2f5599",
+                        borderRadius: 6,
+                        padding: "0.1rem 0.4rem",
+                        letterSpacing: "0.03em",
+                      }}
+                    >
+                      IA
+                    </span>
+                  )}
+                  {meta ? (
+                    <span style={{ color: meta.color, fontWeight: 600, fontSize: "0.85rem" }}>
+                      ● {meta.label}
+                    </span>
+                  ) : (
+                    <span style={{ opacity: 0.45, fontSize: "0.85rem" }}>Sin evaluar</span>
+                  )}
+                </span>
               </div>
               {r.category && (
                 <div style={{ opacity: 0.5, fontSize: "0.8rem", marginTop: "0.2rem" }}>{r.category}</div>
+              )}
+              {r.aiNotes && (
+                <div
+                  style={{
+                    marginTop: "0.5rem",
+                    padding: "0.5rem 0.7rem",
+                    background: "#0f1b30",
+                    border: "1px solid #24406e",
+                    borderRadius: 8,
+                    fontSize: "0.85rem",
+                    lineHeight: 1.5,
+                    opacity: 0.9,
+                  }}
+                >
+                  <span style={{ color: "#93c5fd", fontWeight: 600 }}>Nota IA: </span>
+                  {r.aiNotes}
+                </div>
               )}
 
               <form
