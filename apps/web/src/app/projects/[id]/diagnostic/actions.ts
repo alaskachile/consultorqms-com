@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { db, schema, withEnumCasts } from "@/lib/db";
 import { getDemoOrgId } from "@/lib/demo-org";
 import { diagnoseCompany } from "@/lib/agents/diagnostic";
@@ -70,9 +70,19 @@ export async function saveDiagnostic(formData: FormData) {
     .limit(1);
 
   if (existing) {
+    // Guardar a mano = el humano toma posesión de la cláusula: limpiamos `ai_notes`
+    // para que deje de figurar como "sugerencia de IA pendiente" (su decisión
+    // reemplaza a la propuesta). Así cuenta como confirmada en el readiness.
     await db
       .update(schema.diagnostics)
-      .set(withEnumCasts(schema.diagnostics, { status, answerText, updatedAt: sql`now()` }))
+      .set(
+        withEnumCasts(schema.diagnostics, {
+          status,
+          answerText,
+          aiNotes: null,
+          updatedAt: sql`now()`,
+        }),
+      )
       .where(and(eq(schema.diagnostics.id, existing.id), eq(schema.diagnostics.orgId, orgId)));
   } else {
     await db.insert(schema.diagnostics).values(
@@ -95,12 +105,33 @@ export async function saveDiagnostic(formData: FormData) {
 }
 
 /**
- * Recalcula `readiness_pct` = % de cláusulas APLICABLES marcadas como `compliant`.
+ * Una fila de diagnóstico está "sugerida por IA y pendiente de aceptar" cuando
+ * tiene `ai_notes` cargado pero todavía NO tiene `answer_text` (nadie la confirmó
+ * ni la editó a mano). Todo lo demás con `status` cuenta como "confirmado".
  *
- * Denominador = total de cláusulas de la norma − las marcadas `not_applicable`.
- * Numerador   = cláusulas `compliant`. Las no evaluadas cuentan como NO listas
- * (son aplicables pero todavía sin cumplir), así la barra sube a medida que se
- * cierran gaps. Si no hay cláusulas aplicables, queda en 0.
+ * Es el único criterio que distingue confirmado de sugerido con el schema actual,
+ * sin columnas nuevas.
+ */
+function isPendingAiSuggestion(row: {
+  aiNotes: string | null;
+  answerText: string | null;
+}): boolean {
+  const hasAiNote = !!row.aiNotes && row.aiNotes.trim() !== "";
+  const hasAnswer = !!row.answerText && row.answerText.trim() !== "";
+  return hasAiNote && !hasAnswer;
+}
+
+/**
+ * Recalcula `readiness_pct` = % de cláusulas APLICABLES **confirmadas** como
+ * `compliant`.
+ *
+ * Solo cuentan las cláusulas confirmadas (respondidas a mano o con la sugerencia
+ * de IA aceptada). Las sugerencias de IA pendientes NO suben la barra: cuentan
+ * como "todavía no listas", igual que las no evaluadas. Así el % refleja solo lo
+ * que un humano validó, y sube cuando el usuario acepta las sugerencias.
+ *
+ * Denominador = total de cláusulas de la norma − las CONFIRMADAS como `not_applicable`.
+ * Si no hay cláusulas aplicables, queda en 0.
  */
 async function recalcReadiness(projectId: string, standardId: string, orgId: string) {
   const reqRows = await db
@@ -110,12 +141,17 @@ async function recalcReadiness(projectId: string, standardId: string, orgId: str
   const totalReqs = reqRows.length;
 
   const diagRows = await db
-    .select({ status: schema.diagnostics.status })
+    .select({
+      status: schema.diagnostics.status,
+      aiNotes: schema.diagnostics.aiNotes,
+      answerText: schema.diagnostics.answerText,
+    })
     .from(schema.diagnostics)
     .where(and(eq(schema.diagnostics.projectId, projectId), eq(schema.diagnostics.orgId, orgId)));
 
-  const naCount = diagRows.filter((d) => d.status === "not_applicable").length;
-  const compliantCount = diagRows.filter((d) => d.status === "compliant").length;
+  const confirmed = diagRows.filter((d) => !isPendingAiSuggestion(d));
+  const naCount = confirmed.filter((d) => d.status === "not_applicable").length;
+  const compliantCount = confirmed.filter((d) => d.status === "compliant").length;
   const applicable = totalReqs - naCount;
   const pct = applicable > 0 ? (compliantCount / applicable) * 100 : 0;
 
@@ -183,6 +219,7 @@ export async function runDiagnosticAgent(
         requirementId: schema.diagnostics.requirementId,
         id: schema.diagnostics.id,
         answerText: schema.diagnostics.answerText,
+        aiNotes: schema.diagnostics.aiNotes,
       })
       .from(schema.diagnostics)
       .where(
@@ -205,8 +242,10 @@ export async function runDiagnosticAgent(
 
       const existing = existingByReq.get(requirementId);
 
-      // Conservador: si el usuario ya cargó una respuesta a mano, no la pisamos.
-      if (existing && existing.answerText && existing.answerText.trim() !== "") {
+      // Conservador: solo (re)escribimos filas nuevas o sugerencias de IA pendientes.
+      // Si el humano ya la confirmó (respondió a mano, o su status no tiene ai_notes),
+      // NO la pisamos. Así el agente nunca sobreescribe una decisión humana.
+      if (existing && !isPendingAiSuggestion(existing)) {
         skipped++;
         continue;
       }
@@ -266,6 +305,76 @@ export async function runDiagnosticAgent(
     revalidatePath("/projects");
 
     return { ok: true, applied, skipped, total: agent.assessments.length, modelId: agent.modelId };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export type AcceptSuggestionsResult =
+  | { ok: true; accepted: number }
+  | { ok: false; error: string };
+
+/**
+ * Server Action: ACEPTA en masa las sugerencias de la IA de un proyecto.
+ *
+ * Confirma las cláusulas que están "sugeridas por IA y pendientes" (tienen
+ * `ai_notes` y todavía sin `answer_text`): vuelca el rationale de la IA como
+ * `answer_text`, con lo que dejan de estar pendientes y pasan a contar para el
+ * `readiness_pct`. Se mantiene `ai_notes` para dejar visible que la respuesta
+ * vino de una sugerencia de IA.
+ *
+ * No toca cláusulas ya respondidas a mano (tienen `answer_text`) → el usuario
+ * puede seguir corrigiendo cláusula por cláusula antes o después de aceptar.
+ *
+ * DML acotado: UPDATE sobre `diagnostics` + UPDATE de `readiness_pct`. Sin DELETE
+ * ni DROP/ALTER/migraciones.
+ */
+export async function acceptAiSuggestions(projectId: string): Promise<AcceptSuggestionsResult> {
+  try {
+    if (!projectId?.trim()) throw new Error("Falta el proyecto.");
+
+    const orgId = await getDemoOrgId();
+
+    // Scoping multi-tenant: el proyecto tiene que ser de esta org.
+    const [project] = await db
+      .select({ id: schema.projects.id, standardId: schema.projects.standardId })
+      .from(schema.projects)
+      .where(and(eq(schema.projects.id, projectId.trim()), eq(schema.projects.orgId, orgId)))
+      .limit(1);
+    if (!project) throw new Error("Proyecto no encontrado.");
+
+    // Sugerencias pendientes = tienen ai_notes no vacío Y answer_text vacío.
+    const pending = await db
+      .select({ id: schema.diagnostics.id, aiNotes: schema.diagnostics.aiNotes })
+      .from(schema.diagnostics)
+      .where(
+        and(
+          eq(schema.diagnostics.projectId, project.id),
+          eq(schema.diagnostics.orgId, orgId),
+          isNotNull(schema.diagnostics.aiNotes),
+          ne(schema.diagnostics.aiNotes, ""),
+          or(isNull(schema.diagnostics.answerText), eq(schema.diagnostics.answerText, "")),
+        ),
+      );
+
+    // Confirmamos cada una volcando su rationale (ai_notes) a answer_text. Valor
+    // como parámetro (Data API friendly), sin referencias de columna en el SET.
+    let accepted = 0;
+    for (const row of pending) {
+      await db
+        .update(schema.diagnostics)
+        .set({ answerText: row.aiNotes, updatedAt: sql`now()` })
+        .where(and(eq(schema.diagnostics.id, row.id), eq(schema.diagnostics.orgId, orgId)));
+      accepted++;
+    }
+
+    await recalcReadiness(project.id, project.standardId, orgId);
+
+    revalidatePath(`/projects/${project.id}/diagnostic`);
+    revalidatePath(`/projects/${project.id}`);
+    revalidatePath("/projects");
+
+    return { ok: true, accepted };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

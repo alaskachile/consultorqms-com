@@ -5,6 +5,18 @@ import { db, schema } from "@/lib/db";
 import { getDemoOrgId } from "@/lib/demo-org";
 import { saveDiagnostic } from "./actions";
 import { AiDiagnosticPanel } from "./ai-panel";
+import { AcceptSuggestions } from "./accept-suggestions";
+
+/**
+ * Una cláusula está "sugerida por IA y pendiente" cuando tiene `ai_notes` pero
+ * todavía sin `answer_text` (nadie la aceptó ni la editó a mano). Mismo criterio
+ * que usa `recalcReadiness` en actions.ts para decidir qué cuenta para el %.
+ */
+function isPendingSuggestion(r: { aiNotes: string | null; answerText: string | null }): boolean {
+  const hasAiNote = !!r.aiNotes && r.aiNotes.trim() !== "";
+  const hasAnswer = !!r.answerText && r.answerText.trim() !== "";
+  return hasAiNote && !hasAnswer;
+}
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
@@ -68,9 +80,13 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
     .where(eq(schema.requirements.standardId, project.standardId))
     .orderBy(asc(schema.requirements.sortOrder));
 
-  const evaluated = rows.filter((r) => r.status).length;
-  const naCount = rows.filter((r) => r.status === "not_applicable").length;
-  const compliant = rows.filter((r) => r.status === "compliant").length;
+  // Confirmadas = tienen status y NO son sugerencias de IA pendientes. Solo estas
+  // cuentan para el readiness_pct (coincide con recalcReadiness).
+  const pendingCount = rows.filter((r) => r.status && isPendingSuggestion(r)).length;
+  const confirmedRows = rows.filter((r) => r.status && !isPendingSuggestion(r));
+  const evaluated = confirmedRows.length;
+  const naCount = confirmedRows.filter((r) => r.status === "not_applicable").length;
+  const compliant = confirmedRows.filter((r) => r.status === "compliant").length;
   const applicable = rows.length - naCount;
 
   return (
@@ -108,15 +124,24 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
         <div style={{ opacity: 0.75, fontSize: "0.9rem", lineHeight: 1.6 }}>
           {compliant} cumple · {applicable} aplicables · {naCount} no aplica
           <br />
-          {evaluated} de {rows.length} cláusulas evaluadas
+          {evaluated} confirmadas de {rows.length} cláusulas
+          {pendingCount > 0 && (
+            <>
+              {" · "}
+              <span style={{ color: "#fcd34d" }}>{pendingCount} sugeridas por IA (sin aceptar)</span>
+            </>
+          )}
         </div>
       </div>
 
       <AiDiagnosticPanel projectId={project.id} />
 
+      <AcceptSuggestions projectId={project.id} pendingCount={pendingCount} />
+
       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "0.75rem" }}>
         {rows.map((r) => {
           const meta = r.status ? STATUS_META[r.status] : null;
+          const pending = isPendingSuggestion(r);
           return (
             <li
               key={r.requirementId}
@@ -132,27 +157,52 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
                   {r.clauseNo} — {r.title}
                 </strong>
                 <span style={{ display: "flex", gap: "0.5rem", alignItems: "center", whiteSpace: "nowrap" }}>
-                  {r.aiNotes && !r.answerText && (
-                    <span
-                      title="Sugerido por IA (sin corrección manual)"
-                      style={{
-                        fontSize: "0.7rem",
-                        fontWeight: 700,
-                        color: "#93c5fd",
-                        background: "#1e3a6b",
-                        border: "1px solid #2f5599",
-                        borderRadius: 6,
-                        padding: "0.1rem 0.4rem",
-                        letterSpacing: "0.03em",
-                      }}
-                    >
-                      IA
-                    </span>
-                  )}
-                  {meta ? (
-                    <span style={{ color: meta.color, fontWeight: 600, fontSize: "0.85rem" }}>
-                      ● {meta.label}
-                    </span>
+                  {pending ? (
+                    <>
+                      <span
+                        title="Sugerido por IA — pendiente de aceptar. No cuenta para el %."
+                        style={{
+                          fontSize: "0.7rem",
+                          fontWeight: 700,
+                          color: "#fcd34d",
+                          background: "#3a3212",
+                          border: "1px solid #6b5a1e",
+                          borderRadius: 6,
+                          padding: "0.1rem 0.4rem",
+                          letterSpacing: "0.03em",
+                        }}
+                      >
+                        IA · PENDIENTE
+                      </span>
+                      {meta && (
+                        <span style={{ color: meta.color, fontWeight: 600, fontSize: "0.85rem", opacity: 0.7 }}>
+                          ○ {meta.label}
+                        </span>
+                      )}
+                    </>
+                  ) : meta ? (
+                    <>
+                      {r.aiNotes && (
+                        <span
+                          title="Confirmada a partir de una sugerencia de IA"
+                          style={{
+                            fontSize: "0.7rem",
+                            fontWeight: 700,
+                            color: "#93c5fd",
+                            background: "#1e3a6b",
+                            border: "1px solid #2f5599",
+                            borderRadius: 6,
+                            padding: "0.1rem 0.4rem",
+                            letterSpacing: "0.03em",
+                          }}
+                        >
+                          IA ✓
+                        </span>
+                      )}
+                      <span style={{ color: meta.color, fontWeight: 600, fontSize: "0.85rem" }}>
+                        ● {meta.label}
+                      </span>
+                    </>
                   ) : (
                     <span style={{ opacity: 0.45, fontSize: "0.85rem" }}>Sin evaluar</span>
                   )}
@@ -166,15 +216,17 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
                   style={{
                     marginTop: "0.5rem",
                     padding: "0.5rem 0.7rem",
-                    background: "#0f1b30",
-                    border: "1px solid #24406e",
+                    background: pending ? "#241f0e" : "#0f1b30",
+                    border: pending ? "1px solid #6b5a1e" : "1px solid #24406e",
                     borderRadius: 8,
                     fontSize: "0.85rem",
                     lineHeight: 1.5,
                     opacity: 0.9,
                   }}
                 >
-                  <span style={{ color: "#93c5fd", fontWeight: 600 }}>Nota IA: </span>
+                  <span style={{ color: pending ? "#fcd34d" : "#93c5fd", fontWeight: 600 }}>
+                    {pending ? "Sugerencia IA (pendiente de aceptar): " : "Nota IA: "}
+                  </span>
                   {r.aiNotes}
                 </div>
               )}
