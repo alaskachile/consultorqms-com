@@ -6,6 +6,7 @@ import { getDemoOrgId } from "@/lib/demo-org";
 import { saveDiagnostic } from "./actions";
 import { AiDiagnosticPanel } from "./ai-panel";
 import { AcceptSuggestions } from "./accept-suggestions";
+import { GenerateDocButton } from "./generate-doc-button";
 
 /**
  * Una cláusula está "sugerida por IA y pendiente" cuando tiene `ai_notes` pero
@@ -265,6 +266,10 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
                   Guardar
                 </button>
               </form>
+
+              {(r.status === "gap" || r.status === "partial") && (
+                <GenerateDocButton projectId={project.id} requirementId={r.requirementId} />
+              )}
             </li>
           );
         })}

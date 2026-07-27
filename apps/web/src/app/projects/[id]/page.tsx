@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getDemoOrgId } from "@/lib/demo-org";
 
@@ -37,6 +37,12 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
 
   if (!project) notFound();
 
+  // Contador de documentos del proyecto (SOLO LECTURA, scoped por org).
+  const [{ count: docCount } = { count: 0 }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(schema.documents)
+    .where(and(eq(schema.documents.projectId, project.id), eq(schema.documents.orgId, orgId)));
+
   return (
     <main style={{ maxWidth: 640 }}>
       <p>
@@ -62,14 +68,18 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
         <dd style={ddStyle}>{project.scope || <span style={{ opacity: 0.5 }}>Sin definir</span>}</dd>
       </dl>
 
-      <div style={{ marginTop: "2rem" }}>
+      <div style={{ marginTop: "2rem", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
         <Link href={`/projects/${project.id}/diagnostic`} style={btnStyle}>
           Diagnóstico / GAP →
         </Link>
-        <p style={{ opacity: 0.6, marginTop: "0.75rem", fontSize: "0.9rem" }}>
-          Evaluá cada cláusula (cumple / parcial / gap / no aplica). La preparación se recalcula al guardar.
-        </p>
+        <Link href={`/projects/${project.id}/documents`} style={secondaryBtnStyle}>
+          Documentos ({docCount}) →
+        </Link>
       </div>
+      <p style={{ opacity: 0.6, marginTop: "0.75rem", fontSize: "0.9rem" }}>
+        Evaluá cada cláusula (cumple / parcial / gap / no aplica). La preparación se recalcula al guardar.
+        Generá borradores de documentos con IA desde las cláusulas con gap o parcial.
+      </p>
     </main>
   );
 }
@@ -82,6 +92,17 @@ const btnStyle = {
   padding: "0.6rem 1.25rem",
   background: "#1d4ed8",
   color: "white",
+  borderRadius: 8,
+  textDecoration: "none",
+  fontWeight: 600,
+} as const;
+
+const secondaryBtnStyle = {
+  display: "inline-block",
+  padding: "0.6rem 1.25rem",
+  background: "transparent",
+  color: "#7cc4ff",
+  border: "1px solid #2f5599",
   borderRadius: 8,
   textDecoration: "none",
   fontWeight: 600,
