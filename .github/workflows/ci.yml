@@ -5,18 +5,33 @@ on:
     branches: [main]
   pull_request:
 
+# CI deliberadamente offline: solo instala dependencias y chequea tipos.
+# NO corre `build` (next build evalúa src/lib/db.ts y exige DB_* del .env),
+# ni synth/deploy de CDK, ni nada que necesite credenciales AWS o base de datos.
+# Por eso este workflow no usa ningún secret.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  typecheck:
+    name: Install + typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Sin input `version`: la versión sale de "packageManager": "pnpm@9.0.0"
+      # en el package.json raíz, una única fuente de verdad.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
+
       - run: pnpm install --frozen-lockfile
+
       - run: pnpm typecheck
-      - run: pnpm build
