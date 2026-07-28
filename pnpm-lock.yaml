@@ -32,6 +32,9 @@ importers:
       '@cqms/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      aws-jwt-verify:
+        specifier: ^5.2.1
+        version: 5.2.1
       drizzle-orm:
         specifier: ^0.33.0
         version: 0.33.0(@aws-sdk/client-rds-data@3.1075.0)(@types/react@18.3.31)(postgres@3.4.9)(react@18.3.1)
@@ -908,6 +911,10 @@ packages:
     resolution: {integrity: sha512-y9OHn5/BOcIiq409vPvpypMIr7/8M1ScFe8IkFMSCN1/GI/5c73fQ4pfzNq+VDkj86T5zxs7BQ1qU2lQQytdXA==}
     engines: {node: '>= 18.0.0'}
     hasBin: true
+
+  aws-jwt-verify@5.2.1:
+    resolution: {integrity: sha512-J+buA4M+qvQDk58WXFBLkDodkEX3DDL1ac5XFQPW3opxAsaLXYu5hYnlSHsaBRDBUXBAn695kE/cw/mdyJKwJg==}
+    engines: {node: '>=18.0.0'}
 
   bowser@2.14.1:
     resolution: {integrity: sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==}
@@ -1936,6 +1943,8 @@ snapshots:
       constructs: 10.6.0
 
   aws-cdk@2.1128.1: {}
+
+  aws-jwt-verify@5.2.1: {}
 
   bowser@2.14.1: {}
 

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getDemoOrgId } from "@/lib/demo-org";
+import { requireSession } from "@/lib/auth";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
@@ -15,6 +16,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function ProjectsPage() {
+  // Paso A de Cognito: exige sesión válida (redirige a /login si no hay).
+  // El `org_id` todavía sale de la org demo — derivarlo del token es el Paso B.
+  const session = await requireSession();
   const orgId = await getDemoOrgId();
 
   // SOLO LECTURA: proyectos de la org demo + nombre de la norma.
@@ -33,6 +37,34 @@ export default async function ProjectsPage() {
 
   return (
     <main>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-end",
+          gap: "0.75rem",
+          fontSize: "0.9rem",
+        }}
+      >
+        <span style={{ opacity: 0.7 }}>{session.email}</span>
+        <form action="/api/auth/logout" method="post" style={{ margin: 0 }}>
+          <button
+            type="submit"
+            style={{
+              padding: "0.35rem 0.75rem",
+              background: "transparent",
+              color: "#e7ecf3",
+              border: "1px solid #2a3650",
+              borderRadius: 8,
+              cursor: "pointer",
+              font: "inherit",
+            }}
+          >
+            Cerrar sesión
+          </button>
+        </form>
+      </div>
+
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
         <h1>Proyectos ISO</h1>
         {rows.length > 0 && (
