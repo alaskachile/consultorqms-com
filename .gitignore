@@ -8,4 +8,4 @@ cdk.out/
 .env.local
 .DS_Store
 drizzle/
-"*.tsbuildinfo" 
+*.tsbuildinfo
