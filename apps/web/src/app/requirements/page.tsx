@@ -1,10 +1,16 @@
 import { asc } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
+import { requireSession } from "@/lib/auth";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
 
 export default async function RequirementsPage() {
+  // El catálogo parafraseado es la IP del producto: no se sirve a anónimos.
+  // Es catálogo global (no lleva `org_id`), así que alcanza con exigir sesión;
+  // no hay scoping por tenant que aplicar acá.
+  await requireSession();
+
   // SOLO LECTURA: las 28 cláusulas del catálogo ordenadas por sort_order.
   const rows = await db
     .select({

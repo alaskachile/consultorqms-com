@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { CognitoJwtVerifier } from "aws-jwt-verify";
@@ -109,14 +110,8 @@ export function useSecureCookies(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
-/**
- * Devuelve la sesión del usuario logueado, o `null` si no hay cookie o el
- * id_token no verifica (expirado, firma inválida, otro client id, etc.).
- */
-export async function getSession(): Promise<Session | null> {
-  const token = cookies().get(ID_TOKEN_COOKIE)?.value;
-  if (!token) return null;
-
+/** Verifica un id_token y lo traduce a `Session`. `null` si no verifica. */
+async function verifyIdToken(token: string): Promise<Session | null> {
   try {
     const payload = await getVerifier().verify(token);
     const email = typeof payload.email === "string" ? payload.email : null;
@@ -128,6 +123,125 @@ export async function getSession(): Promise<Session | null> {
     return null;
   }
 }
+
+/** Los campos de `/oauth2/token` que nos interesan al refrescar. */
+type RefreshResponse = {
+  id_token?: string;
+  expires_in?: number;
+};
+
+/**
+ * Canjea el `refresh_token` por un id_token nuevo contra `/oauth2/token`.
+ *
+ * Devuelve `null` si el refresh ya no sirve (vencido, revocado, usuario
+ * deshabilitado) o si Cognito no responde. Cognito NO rota el refresh_token en
+ * este grant: no viene uno nuevo en la respuesta y la cookie sigue como está.
+ */
+async function refreshIdToken(refreshToken: string): Promise<RefreshResponse | null> {
+  const env = getAuthEnv();
+
+  // Client confidencial: igual que en el callback, las credenciales van en el
+  // header Basic y nunca en el body.
+  const basic = Buffer.from(`${env.clientId}:${env.clientSecret}`).toString("base64");
+
+  let response: Response;
+  try {
+    response = await fetch(`${env.hostedUiOrigin}/oauth2/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basic}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: env.clientId,
+        refresh_token: refreshToken,
+      }),
+      cache: "no-store",
+    });
+  } catch {
+    // Cognito inalcanzable: se trata como sesión no renovable.
+    return null;
+  }
+
+  if (!response.ok) return null;
+
+  const tokens = (await response.json().catch(() => null)) as RefreshResponse | null;
+  return tokens?.id_token ? tokens : null;
+}
+
+/**
+ * Escribe una cookie de sesión ignorando el fallo si el contexto es de solo
+ * lectura.
+ *
+ * Next solo permite escribir cookies en Server Actions y Route Handlers: en el
+ * render de un Server Component, `cookies().set()` hace throw. Cuando eso pasa
+ * el id_token renovado igual vale para este request (la sesión sigue viva y la
+ * página se renderiza); lo que se pierde es la persistencia, así que el request
+ * siguiente vuelve a refrescar.
+ */
+function trySetCookie(name: string, value: string, maxAge: number): void {
+  try {
+    cookies().set(name, value, {
+      httpOnly: true,
+      secure: useSecureCookies(),
+      sameSite: "lax",
+      path: "/",
+      maxAge,
+    });
+  } catch {
+    // Contexto de solo lectura (render de Server Component): no es un fallo.
+  }
+}
+
+/** Borra el refresh_token muerto para no reintentar el canje en cada request. */
+function tryClearRefreshToken(): void {
+  try {
+    cookies().delete(REFRESH_TOKEN_COOKIE);
+  } catch {
+    // Mismo caso que en `trySetCookie`.
+  }
+}
+
+/**
+ * Devuelve la sesión del usuario logueado, o `null` si no hay sesión
+ * recuperable.
+ *
+ * Si el id_token está vencido (o su cookie ya expiró, que es lo que pasa a la
+ * hora) pero hay `refresh_token`, pide tokens nuevos a Cognito y sigue con la
+ * sesión en vez de mandar al usuario a /login. Solo devuelve `null` cuando
+ * tampoco hay refresh o el refresh falla.
+ *
+ * Memoizado por request con `cache()`: una página que llama a `requireSession()`
+ * y a `getOrgId()` hace un solo canje contra Cognito, no dos.
+ */
+export const getSession = cache(async (): Promise<Session | null> => {
+  const token = cookies().get(ID_TOKEN_COOKIE)?.value;
+  if (token) {
+    const session = await verifyIdToken(token);
+    if (session) return session;
+  }
+
+  const refreshToken = cookies().get(REFRESH_TOKEN_COOKIE)?.value;
+  if (!refreshToken) return null;
+
+  const tokens = await refreshIdToken(refreshToken);
+  if (!tokens?.id_token) {
+    tryClearRefreshToken();
+    return null;
+  }
+
+  // El token que vuelve de Cognito se verifica igual que el de la cookie: la
+  // firma y el `aud` se comprueban siempre, no se confía en el emisor.
+  const session = await verifyIdToken(tokens.id_token);
+  if (!session) {
+    tryClearRefreshToken();
+    return null;
+  }
+
+  trySetCookie(ID_TOKEN_COOKIE, tokens.id_token, tokens.expires_in ?? 60 * 60);
+  return session;
+});
 
 /**
  * Igual que `getSession()`, pero corta el render y manda a /login cuando no hay
