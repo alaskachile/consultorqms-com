@@ -4,14 +4,14 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db, schema, withEnumCasts } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
 
 /**
- * Crea un Proyecto ISO X asociado a la organización demo.
+ * Crea un Proyecto ISO X en la organización del usuario logueado.
  *
- * INSERT acotado a `projects` (permitido en Etapa 3). El `org_id` sale del
- * helper demo, NUNCA del formulario (regla multi-tenant de CLAUDE.md: el
- * tenant jamás se confía desde el cliente).
+ * INSERT acotado a `projects` (permitido en Etapa 3). El `org_id` sale de la
+ * sesión (`getOrgId()`), NUNCA del formulario (regla multi-tenant de CLAUDE.md:
+ * el tenant jamás se confía desde el cliente).
  */
 export async function createProject(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
@@ -29,7 +29,7 @@ export async function createProject(formData: FormData) {
     .limit(1);
   if (!standard) throw new Error("La norma seleccionada no existe.");
 
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
   const [created] = await db
     .insert(schema.projects)

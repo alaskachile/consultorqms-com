@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { and, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { db, schema, withEnumCasts } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
+import { isRedirectError } from "@/lib/auth";
 import { diagnoseCompany } from "@/lib/agents/diagnostic";
 import { DIAGNOSTIC_STATUSES } from "@cqms/shared";
 
@@ -12,7 +13,7 @@ import { DIAGNOSTIC_STATUSES } from "@cqms/shared";
  * recalcula la preparación del proyecto.
  *
  * Reglas de CLAUDE.md respetadas:
- *  - Multi-tenant: el `org_id` sale SIEMPRE del helper demo, nunca del form.
+ *  - Multi-tenant: el `org_id` sale SIEMPRE de la sesión, nunca del form.
  *    Antes de escribir verificamos que el proyecto sea de esta org y que el
  *    requisito pertenezca a la norma del proyecto.
  *  - DML acotado: solo INSERT/UPDATE sobre `diagnostics` y UPDATE de
@@ -31,7 +32,7 @@ export async function saveDiagnostic(formData: FormData) {
     throw new Error("Estado de diagnóstico inválido.");
   }
 
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
   // Scoping multi-tenant: el proyecto tiene que ser de esta org.
   const [project] = await db
@@ -175,7 +176,7 @@ export type DiagnosticAgentActionResult =
  *
  * Corre el agente IA sobre el proyecto y, por cada cláusula propuesta, hace UPSERT
  * en `diagnostics` (por project_id + requirement_id) con el status sugerido y el
- * rationale en `ai_notes`. Todo scopeado por la org del helper demo.
+ * rationale en `ai_notes`. Todo scopeado por la org de la sesión.
  *
  * Criterio conservador (CLAUDE.md): si una cláusula YA tiene `answer_text` cargado
  * por el usuario, NO se pisa. Recalcula `readiness_pct` y registra la corrida en
@@ -193,7 +194,7 @@ export async function runDiagnosticAgent(
     if (!projectId?.trim()) throw new Error("Falta el proyecto.");
     if (!context) throw new Error("Escribí el contexto de la empresa antes de generar el diagnóstico.");
 
-    const orgId = await getDemoOrgId();
+    const orgId = await getOrgId();
 
     // Scoping multi-tenant: el proyecto tiene que ser de esta org.
     const [project] = await db
@@ -306,6 +307,8 @@ export async function runDiagnosticAgent(
 
     return { ok: true, applied, skipped, total: agent.assessments.length, modelId: agent.modelId };
   } catch (err) {
+    // La sesión venció y `getOrgId()` mandó a /login: dejamos pasar el redirect.
+    if (isRedirectError(err)) throw err;
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -333,7 +336,7 @@ export async function acceptAiSuggestions(projectId: string): Promise<AcceptSugg
   try {
     if (!projectId?.trim()) throw new Error("Falta el proyecto.");
 
-    const orgId = await getDemoOrgId();
+    const orgId = await getOrgId();
 
     // Scoping multi-tenant: el proyecto tiene que ser de esta org.
     const [project] = await db
@@ -376,6 +379,8 @@ export async function acceptAiSuggestions(projectId: string): Promise<AcceptSugg
 
     return { ok: true, accepted };
   } catch (err) {
+    // La sesión venció y `getOrgId()` mandó a /login: dejamos pasar el redirect.
+    if (isRedirectError(err)) throw err;
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

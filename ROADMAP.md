@@ -65,6 +65,7 @@ Prioridad general recomendada: **housekeeping rápido → completar flujo de age
 ### 2.1 Cognito — autenticación real
 - **Tipo:** código + consola (user pool).
 - **Qué:** reemplazar el helper temporal `getDemoOrgId()` por el usuario logueado. Al registrarse, crear su organización; todo el scoping por `org_id` pasa a derivarse del token de Cognito, nunca del cliente.
+- **Estado:** hecho. Paso A = login con Hosted UI (`lib/auth.ts`); Paso B = `getOrgId()` en `lib/org.ts`, una org por usuario, creada al primer ingreso. `getDemoOrgId()` eliminado.
 - **DoD:** dos empresas distintas se registran, cada una ve solo sus proyectos, login/logout funciona.
 
 ### 2.2 Aislamiento multi-tenant probado

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
 import { saveDiagnostic } from "./actions";
 import { AiDiagnosticPanel } from "./ai-panel";
 import { AcceptSuggestions } from "./accept-suggestions";
@@ -37,9 +37,10 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
 };
 
 export default async function DiagnosticPage({ params }: { params: { id: string } }) {
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
-  // SOLO LECTURA, scoped por org (multi-tenant): proyecto + su norma.
+  // Blindaje por URL (multi-tenant): proyecto + su norma, acotado al `org_id` de
+  // la sesión. Un id de otra organización no devuelve fila → notFound().
   const [project] = await db
     .select({
       id: schema.projects.id,

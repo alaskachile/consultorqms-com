@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Fragment, type ReactNode } from "react";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
@@ -32,10 +32,12 @@ export default async function DocumentDetailPage({
 }: {
   params: { id: string; docId: string };
 }) {
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
-  // SOLO LECTURA, scoped por org (multi-tenant): documento del proyecto + su cláusula.
-  // Acotado a este project_id y esta org: un doc de otro proyecto/tenant no es visible.
+  // Blindaje por URL (multi-tenant): el documento se busca por id + project_id +
+  // el `org_id` de la sesión. Con eso la pertenencia del proyecto queda implícita
+  // (documents.org_id es el de su proyecto): un doc de otro tenant, o de otro
+  // proyecto, no devuelve fila → notFound().
   const [doc] = await db
     .select({
       id: schema.documents.id,

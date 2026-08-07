@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, eq, sql } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
@@ -16,10 +16,12 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function ProjectDetailPage({ params }: { params: { id: string } }) {
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
-  // SOLO LECTURA, scoped por org demo (multi-tenant): un proyecto de otra org
-  // nunca debe ser visible aunque se adivine el id.
+  // Blindaje por URL (multi-tenant): el proyecto se busca por id **y** por el
+  // `org_id` de la sesión. Si el id es de otra organización no hay fila y
+  // devolvemos notFound() — indistinguible de un id inexistente, así que la URL
+  // tampoco filtra la existencia de proyectos ajenos.
   const [project] = await db
     .select({
       id: schema.projects.id,

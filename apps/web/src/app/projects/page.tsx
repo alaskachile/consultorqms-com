@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
 import { requireSession } from "@/lib/auth";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
@@ -16,12 +16,12 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function ProjectsPage() {
-  // Paso A de Cognito: exige sesión válida (redirige a /login si no hay).
-  // El `org_id` todavía sale de la org demo — derivarlo del token es el Paso B.
+  // Sesión obligatoria (redirige a /login si no hay). `getOrgId()` deriva el
+  // tenant del `sub` del token y crea la org la primera vez que el usuario entra.
   const session = await requireSession();
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
-  // SOLO LECTURA: proyectos de la org demo + nombre de la norma.
+  // SOLO LECTURA: proyectos de la org del usuario + nombre de la norma.
   const rows = await db
     .select({
       id: schema.projects.id,

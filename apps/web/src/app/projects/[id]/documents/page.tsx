@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
@@ -27,9 +27,10 @@ const ORIGIN_LABEL: Record<string, string> = {
 };
 
 export default async function DocumentsPage({ params }: { params: { id: string } }) {
-  const orgId = await getDemoOrgId();
+  const orgId = await getOrgId();
 
-  // SOLO LECTURA, scoped por org (multi-tenant): proyecto + su norma.
+  // Blindaje por URL (multi-tenant): proyecto + su norma, acotado al `org_id` de
+  // la sesión. Un id de otra organización no devuelve fila → notFound().
   const [project] = await db
     .select({
       id: schema.projects.id,

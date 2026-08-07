@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { db, schema, withEnumCasts } from "@/lib/db";
-import { getDemoOrgId } from "@/lib/demo-org";
+import { getOrgId } from "@/lib/org";
+import { isRedirectError } from "@/lib/auth";
 import { generateDocumentDraft } from "@/lib/agents/documentation";
 import { type DocumentType } from "@cqms/shared";
 
@@ -32,7 +33,7 @@ export type GenerateDocumentResult =
  *  - INSERT en `agent_runs` (agent='documentation') para trazabilidad y gasto.
  *
  * Reglas de CLAUDE.md respetadas:
- *  - Multi-tenant: el `org_id` sale SIEMPRE del helper demo, nunca del cliente.
+ *  - Multi-tenant: el `org_id` sale SIEMPRE de la sesión, nunca del cliente.
  *    Verificamos que el proyecto sea de esta org y que el requisito pertenezca a
  *    la norma del proyecto antes de escribir.
  *  - DML acotado: solo INSERT/UPDATE sobre `documents`, `document_versions` y
@@ -52,7 +53,7 @@ export async function generateDocument(
       throw new Error("Escribí el contexto de la empresa antes de generar el documento.");
     }
 
-    const orgId = await getDemoOrgId();
+    const orgId = await getOrgId();
 
     // Scoping multi-tenant: el proyecto tiene que ser de esta org.
     const [project] = await db
@@ -165,6 +166,8 @@ export async function generateDocument(
 
     return { ok: true, documentId: doc.id, documentType: agent.documentType, modelId: agent.modelId };
   } catch (err) {
+    // La sesión venció y `getOrgId()` mandó a /login: dejamos pasar el redirect.
+    if (isRedirectError(err)) throw err;
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

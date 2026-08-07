@@ -138,3 +138,21 @@ export async function requireSession(): Promise<Session> {
   if (!session) redirect("/login");
   return session;
 }
+
+/**
+ * `true` si el error es el que lanza `redirect()` de Next (no es un fallo: es
+ * control de flujo, Next lo usa para cortar el render y navegar).
+ *
+ * Hace falta en las Server Actions que envuelven todo en `try/catch` y devuelven
+ * `{ ok: false, error }`: sin esto, una sesión vencida se tragaría el redirect a
+ * `/login` y el usuario vería un mensaje de error en vez de ir a loguearse.
+ */
+export function isRedirectError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "digest" in err &&
+    typeof (err as { digest: unknown }).digest === "string" &&
+    (err as { digest: string }).digest.startsWith("NEXT_REDIRECT")
+  );
+}

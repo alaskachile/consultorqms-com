@@ -42,7 +42,7 @@ El flujo del consultor IA está andando: **diagnostica → detecta gaps → gene
 - **Datos:** Aurora PostgreSQL Serverless v2, accedida por **RDS Data API** (HTTPS, sin VPC/red). ORM **Drizzle**. Multi-tenant por `org_id`.
 - **IA:** **Amazon Bedrock**, modelo `anthropic.claude-sonnet-4-6`. Orquestación propia con tool-calling / mensajes (NO Bedrock Agents administrado). Capa de modelo **intercambiable** en `apps/web/src/lib/ai.ts`.
 - **Archivos (pendiente):** S3 para evidencia/documentos.
-- **Auth (pendiente):** Amazon Cognito. Hoy se usa un helper temporal `getDemoOrgId()`.
+- **Auth:** Amazon Cognito (Hosted UI + Authorization Code, cookies httpOnly). El `org_id` sale de la sesión vía `getOrgId()`. Una organización por usuario; invitaciones y multi-usuario, pendientes.
 - **Monorepo:** pnpm + Turborepo.
 - **Repo:** `github.com/alaskachile/consultorqms-com` (privado; se hace público solo temporalmente para clonar cuando hace falta). Email de commits: `desarrollo@alaskachile.cl`.
 
@@ -56,7 +56,8 @@ consultorqms-com/
 ├─ apps/web/            # Next.js (Vercel) — TODO el frontend + agentes viven acá
 │  └─ src/
 │     ├─ lib/db.ts               # cliente Drizzle por Data API + helper withEnumCasts
-│     ├─ lib/demo-org.ts         # getDemoOrgId() TEMPORAL hasta Cognito
+│     ├─ lib/auth.ts             # sesión de Cognito (requireSession, cookies)
+│     ├─ lib/org.ts              # getOrgId(): org del usuario logueado (la crea si no existe)
 │     ├─ lib/ai.ts               # capa de modelo intercambiable (Bedrock / z.ai)
 │     ├─ lib/agents/diagnostic.ts     # agente 1
 │     ├─ lib/agents/documentation.ts  # agente 2
@@ -155,5 +156,5 @@ Orden recomendado hacia "un cliente pagando":
 
 - Antes de construir: confirmar que la app levanta y muestra los proyectos (no construir sobre algo dormido).
 - Cada feature nueva se le pasa a **Claude Code** con un prompt que: referencia `PLAN.md`/`CLAUDE.md`, da contexto del estado, marca claramente **qué NO tocar** (schema, infra, `.env`, red), acota los permisos de escritura a las tablas necesarias, y pide frenar antes de cualquier comando destructivo.
-- Reutilizar siempre lo que ya existe: la capa `ai.ts` para agentes nuevos, `withEnumCasts` para enums, `getDemoOrgId()` hasta que entre Cognito.
+- Reutilizar siempre lo que ya existe: la capa `ai.ts` para agentes nuevos, `withEnumCasts` para enums, `getOrgId()` para el tenant.
 - Guardar en git al cerrar cada avance (`git add . ; git commit -m "..." ; git push`).

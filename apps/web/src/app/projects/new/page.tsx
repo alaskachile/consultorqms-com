@@ -1,12 +1,17 @@
 import Link from "next/link";
 import { asc } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
+import { requireSession } from "@/lib/auth";
 import { createProject } from "../actions";
 
 // Se consulta en cada request (la Data API no está disponible en build time).
 export const dynamic = "force-dynamic";
 
 export default async function NewProjectPage() {
+  // Sesión obligatoria: sin esto la pantalla se renderizaba para cualquiera (el
+  // `org_id` recién se derivaba al enviar el formulario).
+  await requireSession();
+
   // SOLO LECTURA: normas disponibles del catálogo (hoy solo ISO 9001).
   const standards = await db
     .select({
