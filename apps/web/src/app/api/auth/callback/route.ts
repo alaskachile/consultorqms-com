@@ -76,7 +76,30 @@ export async function GET(request: NextRequest) {
   });
 
   if (!tokenResponse.ok) {
-    // El cuerpo del error puede traer datos sensibles: no se loguea.
+    // Diagnóstico: del cuerpo de error de Cognito SOLO se loguean `error` y
+    // `error_description` (son códigos OAuth2, no traen tokens ni secretos).
+    // Nunca el body completo.
+    let oauthError: unknown;
+    let oauthErrorDescription: unknown;
+    try {
+      const errorBody = (await tokenResponse.json()) as Record<string, unknown>;
+      oauthError = errorBody.error;
+      oauthErrorDescription = errorBody.error_description;
+    } catch {
+      // Cognito puede responder algo que no es JSON (p. ej. HTML de un 4xx del
+      // dominio mal formado): no hay campos que leer.
+    }
+    console.error("[auth/callback] token exchange falló", {
+      status: tokenResponse.status,
+      error: oauthError,
+      error_description: oauthErrorDescription,
+      // Presencia/forma del secret, nunca su valor.
+      clientSecretPresent: typeof env.clientSecret === "string" && env.clientSecret.length > 0,
+      clientSecretLength: env.clientSecret?.length ?? 0,
+      clientIdLength: env.clientId?.length ?? 0,
+      redirectUri: getRedirectUri(),
+      tokenEndpoint: `${env.hostedUiOrigin}/oauth2/token`,
+    });
     return failTo(env, "token_exchange");
   }
 
