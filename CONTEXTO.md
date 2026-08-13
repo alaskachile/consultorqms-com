@@ -25,7 +25,7 @@ De idea a producto real, en varias sesiones. Funcionando de punta a punta:
   - `/requirements` — lista las 28 cláusulas.
   - `/projects` — dashboard, crear y ver **Proyectos ISO X**.
   - `/projects/[id]` — detalle del proyecto (norma, estado, `readiness_pct`, links).
-  - `/projects/[id]/diagnostic` — **diagnóstico**: marca cumple/parcial/gap/no-aplica por cláusula, calcula `readiness_pct`. Incluye **diagnóstico asistido por IA** (agente que evalúa las 28 cláusulas leyendo un texto de contexto de la empresa; el humano acepta/corrige).
+  - `/projects/[id]/diagnostic` — **diagnóstico**: marca cumple/parcial/gap/no-aplica por cláusula, calcula `readiness_pct`. Incluye **diagnóstico asistido por IA** (agente que evalúa las 28 cláusulas leyendo un texto de contexto de la empresa; el humano acepta/corrige) y, por cláusula, el **panel de evidencia** (subir / listar / descargar / borrar archivos en S3).
   - `/projects/[id]/tasks` — **tareas** generadas desde los gaps + tareas manuales.
   - `/projects/[id]/documents` + `/documents/[docId]` — **documentos generados por IA** (borradores de procedimientos/políticas adaptados al rubro).
 - **Dos agentes IA funcionando** sobre una capa de modelo intercambiable:
@@ -41,7 +41,7 @@ El flujo del consultor IA está andando: **diagnostica → detecta gaps → gene
 - **Frontend:** Next.js (App Router, TypeScript). Server Components + **Server Actions** para escritura. Hoy corre en local; deploy previsto en **Vercel**.
 - **Datos:** Aurora PostgreSQL Serverless v2, accedida por **RDS Data API** (HTTPS, sin VPC/red). ORM **Drizzle**. Multi-tenant por `org_id`.
 - **IA:** **Amazon Bedrock**, modelo `anthropic.claude-sonnet-4-6`. Orquestación propia con tool-calling / mensajes (NO Bedrock Agents administrado). Capa de modelo **intercambiable** en `apps/web/src/lib/ai.ts`.
-- **Archivos (pendiente):** S3 para evidencia/documentos.
+- **Archivos:** **S3 funcionando** para evidencia. Bucket privado; la subida va **directa del navegador a S3** con presigned URL (el archivo nunca pasa por el server de Next: Vercel tiene límite de body y cobra tránsito). Claves prefijadas por `org_id/project_id/requirement_id/`. El listado sale siempre de la tabla `evidence`, nunca de `s3:ListBucket`. Ver `lib/s3.ts` y `lib/evidence-files.ts`.
 - **Auth:** Amazon Cognito (Hosted UI + Authorization Code, cookies httpOnly). El `org_id` sale de la sesión vía `getOrgId()`. Una organización por usuario; invitaciones y multi-usuario, pendientes.
 - **Monorepo:** pnpm + Turborepo.
 - **Repo:** `github.com/alaskachile/consultorqms-com` (privado; se hace público solo temporalmente para clonar cuando hace falta). Email de commits: `desarrollo@alaskachile.cl`.
@@ -59,6 +59,8 @@ consultorqms-com/
 │     ├─ lib/auth.ts             # sesión de Cognito (requireSession, cookies)
 │     ├─ lib/org.ts              # getOrgId(): org del usuario logueado (la crea si no existe)
 │     ├─ lib/ai.ts               # capa de modelo intercambiable (Bedrock / z.ai)
+│     ├─ lib/s3.ts               # presigned URLs de subida/descarga, claves por org_id
+│     ├─ lib/evidence-files.ts   # validación de archivos (tipo, tamaño, nombre)
 │     ├─ lib/agents/diagnostic.ts     # agente 1
 │     ├─ lib/agents/documentation.ts  # agente 2
 │     └─ app/...                 # rutas (requirements, projects, diagnostic, tasks, documents)
@@ -105,6 +107,8 @@ Por tenant (`org_id`): `organizations`, `users`, `projects`, `diagnostics`, `tas
 - **CDK evitado para crear la base:** el cluster Aurora se creó **a mano por la consola** con Data API, lo que eliminó toda la fricción de VPC/red. No reintroducir complejidad de CDK sin razón fuerte.
 - **Data API = clave del stack:** al ser HTTPS, elimina VPC, security groups, psql, connection strings. Es lo que hace que Next → Drizzle → Aurora funcione sin pelear con red. Frontend y agentes hablan por acá.
 - **Provider portable:** `AI_PROVIDER` mantiene el modelo intercambiable Bedrock ↔ z.ai/GLM. z.ai expone API compatible con Anthropic (cambiar `ANTHROPIC_BASE_URL` + key). Preservar esta abstracción. Bedrock/Claude ahora (mejor calidad, cubierto por créditos AWS); z.ai/GLM como palanca de costo a escala.
+- **Checksum del SDK de S3 rompe TODA subida prefirmada:** desde `@aws-sdk/client-s3` **v3.729** el SDK agrega por defecto un checksum (`x-amz-checksum-crc32`) al `PutObject`. En una URL prefirmada ese header queda **firmado**, el navegador nunca lo manda y S3 devuelve **403 en cada subida** (sin pista de por qué). Solución: crear el `S3Client` con **`requestChecksumCalculation: "WHEN_REQUIRED"`** (`lib/s3.ts`). No sacarlo.
+- **El presigner NO firma `content-type`:** `s3-request-presigner` firma `content-length;host` — el `ContentLength` va firmado (el PUT tiene que traer exactamente ese tamaño, es lo que impide reusar una URL de 2 MB para subir 2 GB), pero el `content-type` está en `unsignableHeaders` a propósito (el navegador puede reescribirlo y rompería la firma). O sea: el tipo declarado al pedir la URL **no es garantía** de lo que se subió. Por eso la descarga fuerza `ResponseContentDisposition: attachment` en vez de confiar en él (evita ejecutar HTML/SVG subido bajo el dominio de S3).
 - **Copyright ISO:** el texto oficial de las normas NUNCA se almacena; solo contenido propio parafraseado. Restricción dura.
 - **Estructurado vs RAG:** el checklist de requisitos y el cálculo de readiness viven en Postgres (determinístico, citable). El RAG queda reservado solo para guía/ejemplos explicativos (aún no construido).
 - **Humano-en-el-loop:** la IA propone estados/documentos; el humano confirma antes de que cuenten para `readiness_pct`. Es intencional y arquitectónicamente aplicado (compliance).
@@ -140,8 +144,8 @@ Máquina nueva: clonar de GitHub (el repo está completo; los backups por carpet
 
 Orden recomendado hacia "un cliente pagando":
 1. **Arreglar el CI** de GitHub Actions (falla en cada push; sacar ruido).
-2. **Subir documentos/evidencia a S3** → **validación de evidencia** (S3 va primero; no se puede validar lo que no se sube).
-3. **Cognito** (login real, reemplazar Demo Org) → **aislamiento multi-tenant probado**.
+2. ~~**Subir evidencia a S3**~~ (hecho) → **validación de evidencia** por IA (ahora sí se puede: ya hay archivos que validar).
+3. ~~**Cognito** (login real, reemplazar Demo Org)~~ (hecho) → **aislamiento multi-tenant probado**.
 4. **Deploy en Vercel** + dominio + credenciales de producción (sacar secretos del `.env` local; cerrar acceso público de Aurora).
 5. **Stripe** (suscripción).
 6. **Agente auditor** (auditoría interna simulada) y **agente coach** (chat guía) — completan el flujo.

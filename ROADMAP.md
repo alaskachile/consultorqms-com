@@ -11,6 +11,8 @@ Complemento del `PLAN.md`. Estado a la fecha y pasos restantes para pasar del n�
 - **Diagnóstico** manual + **agente IA de diagnóstico** (evalúa las 28 cláusulas leyendo el contexto de la empresa; humano acepta/corrige; calcula `readiness_pct`).
 - **Tareas** generadas desde los gaps.
 - **Agente IA de documentación** (genera borradores de procedimientos/políticas adaptados al rubro).
+- **Login real con Cognito** (Hosted UI) y `org_id` derivado de la sesión.
+- **Evidencia en S3** funcionando: subida directa por presigned URL, listado y descarga por cláusula.
 
 Dos agentes IA en serie sobre la capa de modelo intercambiable (`ai.ts`, Bedrock / z.ai listo).
 
@@ -37,10 +39,11 @@ Prioridad general recomendada: **housekeeping rápido → completar flujo de age
 
 > Dependencia clave: la **validación de evidencia** necesita primero **subir archivos (S3)**. Ese es el orden.
 
-### 1.1 Subir documentos y evidencia a S3
+### 1.1 Subir documentos y evidencia a S3 — hecho ✓
 - **Tipo:** código + consola (crear bucket / permisos).
 - **Qué:** que el cliente cargue los documentos que ya tiene (manual, procedimientos, registros) y la evidencia por cláusula. Subida a S3 con presigned URLs, ligada a `requirement_id` en la tabla `evidence` (ya existe). Claves S3 prefijadas por `org_id`.
-- **DoD:** subir un archivo desde una cláusula, verlo listado y poder descargarlo.
+- **Estado:** hecho. Bucket privado + CORS; `lib/s3.ts` (presigned PUT/GET, claves `org_id/project_id/requirement_id/`) y `lib/evidence-files.ts` (validación de tipo/tamaño/nombre). Panel de evidencia por cláusula dentro de `/projects/[id]/diagnostic`. Subida directa navegador → S3 en dos pasos (pedir URL → confirmar y escribir la fila en `evidence`).
+- **DoD:** ✓ subir un archivo desde una cláusula, verlo listado y poder descargarlo.
 
 ### 1.2 Validación de evidencia (agente / lógica)
 - **Tipo:** código (reutiliza `ai.ts`).
@@ -128,8 +131,8 @@ Prioridad general recomendada: **housekeeping rápido → completar flujo de age
 ## Orden recomendado (camino más corto a "un cliente pagando")
 
 1. **0.1** CI (sacar ruido) — rápido.
-2. **1.1** S3 (subir documentos) → **1.2** validación de evidencia.
-3. **2.1** Cognito (multi-cliente) → **2.2** aislamiento probado.
+2. ~~**1.1** S3 (subir documentos)~~ ✓ → **1.2** validación de evidencia.
+3. ~~**2.1** Cognito (multi-cliente)~~ ✓ → **2.2** aislamiento probado.
 4. **3.1–3.2** Deploy en Vercel + credenciales de producción + dominio.
 5. **4.1** Stripe.
 6. **1.3 / 1.4** Auditor y coach (completan el flujo; se pueden intercalar antes según demanda).

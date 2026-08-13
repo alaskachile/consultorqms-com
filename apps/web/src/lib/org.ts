@@ -109,3 +109,28 @@ export const getOrgId = cache(async (): Promise<string> => {
 
   return winner;
 });
+
+/**
+ * `users.id` del usuario logueado (el de la tabla, no el `sub` de Cognito).
+ *
+ * Sirve para las columnas de autoría (`evidence.uploaded_by`,
+ * `document_versions.created_by`, …). Llama primero a `getOrgId()` para
+ * garantizar que el usuario ya esté aprovisionado.
+ *
+ * Devuelve `null` en vez de tirar: la autoría es un dato de auditoría deseable,
+ * pero no es motivo para abortar una operación del usuario.
+ *
+ * Memoizado por request, igual que `getOrgId()`.
+ */
+export const getUserId = cache(async (): Promise<string | null> => {
+  await getOrgId();
+  const session = await requireSession();
+
+  const [row] = await db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(eq(schema.users.cognitoSub, session.sub))
+    .limit(1);
+
+  return row?.id ?? null;
+});

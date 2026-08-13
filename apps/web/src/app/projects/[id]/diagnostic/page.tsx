@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db, schema } from "@/lib/db";
 import { getOrgId } from "@/lib/org";
 import { saveDiagnostic } from "./actions";
 import { AiDiagnosticPanel } from "./ai-panel";
 import { AcceptSuggestions } from "./accept-suggestions";
 import { GenerateDocButton } from "./generate-doc-button";
+import { EvidencePanel, type EvidenceItem } from "../evidence/evidence-panel";
 
 /**
  * Una cláusula está "sugerida por IA y pendiente" cuando tiene `ai_notes` pero
@@ -17,6 +18,18 @@ function isPendingSuggestion(r: { aiNotes: string | null; answerText: string | n
   const hasAiNote = !!r.aiNotes && r.aiNotes.trim() !== "";
   const hasAnswer = !!r.answerText && r.answerText.trim() !== "";
   return hasAiNote && !hasAnswer;
+}
+
+/**
+ * Fecha corta para el listado de evidencia. La Data API puede devolver el
+ * timestamp como `Date` o como texto según el driver, así que se normaliza acá
+ * (en el server) y al cliente le llega ya formateada.
+ */
+function formatDate(value: Date | string | null): string {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 // Se consulta en cada request (la Data API no está disponible en build time).
@@ -81,6 +94,27 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
     )
     .where(eq(schema.requirements.standardId, project.standardId))
     .orderBy(asc(schema.requirements.sortOrder));
+
+  // Evidencia del proyecto, agrupada por cláusula. Sale de la tabla `evidence`
+  // (scopeada por org), NUNCA de un ListObjects contra el bucket: el usuario de
+  // producción no tiene `s3:ListBucket` a propósito.
+  const evidenceRows = await db
+    .select({
+      id: schema.evidence.id,
+      requirementId: schema.evidence.requirementId,
+      filename: schema.evidence.filename,
+      uploadedAt: schema.evidence.uploadedAt,
+    })
+    .from(schema.evidence)
+    .where(and(eq(schema.evidence.projectId, project.id), eq(schema.evidence.orgId, orgId)))
+    .orderBy(desc(schema.evidence.uploadedAt));
+
+  const evidenceByRequirement = new Map<string, EvidenceItem[]>();
+  for (const row of evidenceRows) {
+    const list = evidenceByRequirement.get(row.requirementId) ?? [];
+    list.push({ id: row.id, filename: row.filename, uploadedAt: formatDate(row.uploadedAt) });
+    evidenceByRequirement.set(row.requirementId, list);
+  }
 
   // Confirmadas = tienen status y NO son sugerencias de IA pendientes. Solo estas
   // cuentan para el readiness_pct (coincide con recalcReadiness).
@@ -271,6 +305,12 @@ export default async function DiagnosticPage({ params }: { params: { id: string 
               {(r.status === "gap" || r.status === "partial") && (
                 <GenerateDocButton projectId={project.id} requirementId={r.requirementId} />
               )}
+
+              <EvidencePanel
+                projectId={project.id}
+                requirementId={r.requirementId}
+                items={evidenceByRequirement.get(r.requirementId) ?? []}
+              />
             </li>
           );
         })}

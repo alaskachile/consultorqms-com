@@ -32,6 +32,9 @@ const rdsClient = new RDSDataClient({ region: process.env.AWS_REGION });
  *    y `projects`.
  *  - Etapa 6 (Diagnóstico / GAP): INSERT/UPDATE/SELECT sobre `diagnostics` y
  *    UPDATE de `readiness_pct` en `projects` (recálculo de preparación).
+ *  - Bloque 1.1 (Evidencia en S3): INSERT/SELECT/DELETE sobre `evidence`. El
+ *    DELETE es la única excepción de borrado del proyecto: el usuario puede
+ *    quitar un archivo que subió por error.
  * NUNCA ejecutar DROP / ALTER / migraciones ni tocar otras tablas con DML.
  */
 export const db = drizzle(rdsClient, { resourceArn, secretArn, database, schema });
