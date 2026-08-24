@@ -7,23 +7,24 @@ import { PgEnumColumn, type PgTable } from "drizzle-orm/pg-core";
 // Reutilizamos el schema existente de packages/db (NO se redefine ni se modifica).
 import * as schema from "@cqms/db/src/schema";
 
-const resourceArn = process.env.DB_CLUSTER_ARN;
-const secretArn = process.env.DB_SECRET_ARN;
-const database = process.env.DB_NAME;
-
-if (!resourceArn || !secretArn || !database) {
-  throw new Error(
-    "Faltan DB_CLUSTER_ARN, DB_SECRET_ARN o DB_NAME en el entorno. " +
-      "Se cargan desde el .env de la raíz del monorepo (ver next.config.mjs).",
-  );
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Falta ${name} en el entorno. Se carga desde el .env de la raíz del monorepo (ver next.config.mjs).`,
+    );
+  }
+  return value;
 }
 
-// El RDSDataClient toma las credenciales AWS de la cadena por defecto
-// (perfil/SSO/variables AWS_*). La región viene del .env.
-const rdsClient = new RDSDataClient({ region: process.env.AWS_REGION });
+type DrizzleDb = ReturnType<typeof drizzle<typeof schema>>;
 
 /**
- * Cliente Drizzle sobre Aurora vía RDS Data API (RDS Data API).
+ * Cliente Drizzle sobre Aurora vía RDS Data API, cacheado a nivel módulo.
+ *
+ * Lectura perezosa del entorno: si falta una variable, falla al usarse y no al
+ * importarse (mismo criterio que `lib/auth.ts` y `lib/s3.ts`; si no, `next build`
+ * revienta al pre-renderizar cualquier página que toque este módulo).
  *
  * Regla del proyecto: por defecto SOLO LECTURA (`db.select(...)`).
  *
@@ -37,7 +38,32 @@ const rdsClient = new RDSDataClient({ region: process.env.AWS_REGION });
  *    quitar un archivo que subió por error.
  * NUNCA ejecutar DROP / ALTER / migraciones ni tocar otras tablas con DML.
  */
-export const db = drizzle(rdsClient, { resourceArn, secretArn, database, schema });
+let cachedDb: DrizzleDb | null = null;
+
+function getDb(): DrizzleDb {
+  if (cachedDb) return cachedDb;
+  const resourceArn = required("DB_CLUSTER_ARN");
+  const secretArn = required("DB_SECRET_ARN");
+  const database = required("DB_NAME");
+  // El RDSDataClient toma las credenciales AWS de la cadena por defecto
+  // (perfil/SSO/variables AWS_*). La región viene del .env.
+  const rdsClient = new RDSDataClient({ region: process.env.AWS_REGION });
+  cachedDb = drizzle(rdsClient, { resourceArn, secretArn, database, schema });
+  return cachedDb;
+}
+
+/**
+ * Proxy sobre el cliente real: mantiene la API pública (`db.select(...)`, etc.)
+ * sin construir el cliente al importar el módulo. Cada acceso a una propiedad
+ * dispara `getDb()`, que solo construye el cliente la primera vez.
+ */
+export const db: DrizzleDb = new Proxy({} as DrizzleDb, {
+  get(_target, prop) {
+    const client = getDb();
+    const value = client[prop as keyof DrizzleDb];
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+}) as DrizzleDb;
 
 export { schema };
 
