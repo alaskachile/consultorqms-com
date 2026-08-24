@@ -5,9 +5,10 @@ on:
     branches: [main]
   pull_request:
 
-# CI deliberadamente offline: solo instala dependencias y chequea tipos.
-# NO corre `build` (next build evalúa src/lib/db.ts y exige DB_* del .env),
-# ni synth/deploy de CDK, ni nada que necesite credenciales AWS o base de datos.
+# CI deliberadamente offline: instala dependencias, chequea tipos y builda.
+# `src/lib/db.ts` (y auth.ts/s3.ts) leen sus env vars de forma perezosa, recién
+# en el primer uso real, así que `next build` ya no las exige. NO corre
+# synth/deploy de CDK ni nada que necesite credenciales AWS o base de datos.
 # Por eso este workflow no usa ningún secret.
 permissions:
   contents: read
@@ -17,8 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  typecheck:
-    name: Install + typecheck
+  build:
+    name: Install + typecheck + build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,3 +36,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm typecheck
+
+      - run: pnpm build
